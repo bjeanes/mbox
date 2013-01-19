@@ -4,19 +4,28 @@ require 'bundler'
 Bundler.setup(:default)
 
 require 'mail'
-require 'enumerable'
 
 class Mbox
   include Enumerable
 
   DEFAULT_SEPARATOR = /^From [^\s]+@[^\s]+ .{24}$/
 
-  attr_accessor :io, :messages
+  attr_accessor :io, :messages, :path
 
-  def initialize(io)
-    self.io = io
+  def initialize(path_or_messages)
+    if path_or_messages.is_a? Array
+      self.messages = path_or_messages
+    else
+      self.path = File.expand_path(path_or_messages)
+      self.io = File.open(path, 'r+:ASCII-8BIT')
+      read
+    end
+  end
 
-    parse
+  def write(path)
+    File.open(path, 'w+') do |f|
+      f.write map { |m| "From #{m.raw_envelope}\r\n#{m.raw_source}" }.join("\r\n" * 2)
+    end
   end
 
   def size
@@ -29,23 +38,20 @@ class Mbox
 
   private
 
-  def parse
+  def read
+    return if io.nil?
+
     self.messages = []
 
     io.rewind
-    lines = io.readlines.freeze
 
-    current_message = nil
-
-    lines.each_with_index do |line, index|
-      next unless index.zero? || lines[index - 1] == $/
-
-      if line =~ DEFAULT_SEPARATOR
-        self.messages = messages.concat Mail.new(current_message.chomp) if current_message
-        current_message = ""
-      else
-        current_message << line
-      end
+    self.messages = io.slice_before(empty: true) do |line, state|
+      previous_line_empty = state[:empty]
+      state[:empty] = line.chomp.empty?
+      previous_line_empty && line.start_with?("From ")
+    end.map do |mail|
+      mail.pop if mail.last.chomp.empty?
+      Mail.new(mail.join(""))
     end
   end
 end
