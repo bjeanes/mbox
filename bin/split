@@ -1,0 +1,63 @@
+#!/usr/bin/env ruby
+
+=begin
+USAGE:
+
+#{$0} MBOX_DIR OUTPUT_DIR EMAIL_LIST [EMAIL_LIST [EMAIL_LIST [...]]]
+
+MBOX_DIR is a directory of .mbox files in a hierarchical structure
+OUTPUT_DIR is where new .mbox files will be outputted, in sub-directories for each provided EMAIL_LIST
+EMAIL_LIST is a comma-separated list of email address aliases. The first email in each list will be used as the output sub-directory name and all emails in a particular list will be sorted into that sub-directory.
+=end
+
+MEGABYTE = 2 ** 20
+
+mbox_directory   = File.expand_path(ARGV.shift)
+output_directory = File.expand_path(ARGV.shift)
+email_lists      = ARGV.map { |email_list| email_list.split(",") }
+
+email_matchers = {}
+email_lists.each do |emails|
+  email_matchers[/#{emails.join('|')}/] = emails.first
+end
+
+$: << File.expand_path("../../lib", __FILE__)
+require "mbox"
+require "fileutils"
+
+Dir.chdir(mbox_directory) do
+  Dir["**/*.mbox"].each do |path|
+    output = Hash.new { |h, k| h[k] = Mbox.new([]) }
+
+    size = File.size(path).to_f / MEGABYTE
+    size = size.round(2)
+
+    puts "Reading #{path.inspect} (#{size} MB). This may take a while..."
+    mbox = Mbox.new(path)
+
+    puts "Finished reading Mbox. Now processing emails."
+
+    mbox.each do |message|
+      STDOUT.print "."
+      STDOUT.flush
+
+      email_matchers.each do |regex, group|
+        to = [message[:to], message[:cc], message[:bcc], message[:delivered_to]].compact
+        to = to.map(&:value).map(&:to_s).join
+
+        output[group].messages << message if regex.match(to)
+      end
+    end
+
+    puts ""
+
+    output.each do |group, mbox|
+      next unless mbox.size > 0
+
+      output_path = File.join(output_directory, group, path)
+      FileUtils.mkdir_p(File.dirname(output_path))
+      puts "Writing out #{output_path}"
+      mbox.write(output_path)
+    end
+  end
+end
